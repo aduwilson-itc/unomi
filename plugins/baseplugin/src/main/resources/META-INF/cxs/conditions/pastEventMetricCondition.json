@@ -1,0 +1,65 @@
+{
+  "metadata": {
+    "id": "pastEventMetricCondition",
+    "name": "pastEventMetricCondition",
+    "description": "Evaluates a maintained count, sum, or average over matching profile events.",
+    "systemTags": [
+      "availableToEndUser",
+      "behavioral",
+      "profileTags",
+      "event",
+      "condition",
+      "profileCondition"
+    ],
+    "readOnly": true
+  },
+  "conditionEvaluator": "pastEventMetricConditionEvaluator",
+  "queryBuilder": "pastEventMetricConditionESQueryBuilder",
+  "parameters": [
+    {
+      "id": "numberOfDays",
+      "type": "integer",
+      "multivalued": false
+    },
+    {
+      "id": "fromDate",
+      "type": "date",
+      "multivalued": false
+    },
+    {
+      "id": "toDate",
+      "type": "date",
+      "multivalued": false
+    },
+    {
+      "id": "aggregationType",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "metricProperty",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "minimumValue",
+      "type": "double",
+      "multivalued": false
+    },
+    {
+      "id": "maximumValue",
+      "type": "double",
+      "multivalued": false
+    },
+    {
+      "id": "operator",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "eventCondition",
+      "type": "Condition",
+      "multivalued": false
+    }
+  ]
+}

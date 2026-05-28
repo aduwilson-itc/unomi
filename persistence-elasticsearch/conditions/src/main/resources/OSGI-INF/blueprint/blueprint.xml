@@ -72,4 +72,16 @@
         </bean>
     </service>
 
+    <service
+            interface="org.apache.unomi.persistence.elasticsearch.ConditionESQueryBuilder">
+        <service-properties>
+            <entry key="queryBuilderId" value="pastEventMetricConditionESQueryBuilder"/>
+        </service-properties>
+        <bean class="org.apache.unomi.persistence.elasticsearch.querybuilders.advanced.PastEventMetricConditionESQueryBuilder">
+            <property name="definitionsService" ref="definitionsService"/>
+            <property name="persistenceService" ref="persistenceService"/>
+            <property name="segmentService" ref="segmentService"/>
+        </bean>
+    </service>
+
 </blueprint>

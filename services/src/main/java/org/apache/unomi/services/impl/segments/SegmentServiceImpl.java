@@ -63,6 +63,7 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
     private static final String VALIDATION_PROFILE_ID = "validation-profile-id";
     private static final String RESET_SCORING_SCRIPT = "resetScoringPlan";
     private static final String EVALUATE_SCORING_ELEMENT_SCRIPT = "evaluateScoringPlanElement";
+    private static final String PAST_EVENT_METRIC_CONDITION = "pastEventMetricCondition";
 
     private BundleContext bundleContext;
 
@@ -752,15 +753,24 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
                     rule.setCondition(condition);
                     rule.getMetadata().setHidden(true);
                     final Action action = new Action();
-                    action.setActionType(definitionsService.getActionType("setEventOccurenceCountAction"));
-                    action.setParameter("pastEventCondition", parentCondition);
+                    if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
+                        action.setActionType(definitionsService.getActionType("setEventMetricAction"));
+                        action.setParameter("pastEventMetricCondition", parentCondition);
+                    } else {
+                        action.setActionType(definitionsService.getActionType("setEventOccurenceCountAction"));
+                        action.setParameter("pastEventCondition", parentCondition);
+                    }
 
                     rule.setActions(List.of(action));
                     rule.setLinkedItems(List.of(metadata.getId()));
 
                     // it's a new generated rules to keep track of the event count, we should update all the profile that match this past event
                     // it will update the count of event occurrence on the profile directly
-                    recalculatePastEventOccurrencesOnProfiles(condition, parentCondition, true, false);
+                    if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
+                        recalculatePastEventMetricsOnProfiles(condition, parentCondition, true, false);
+                    } else {
+                        recalculatePastEventOccurrencesOnProfiles(condition, parentCondition, true, false);
+                    }
                 } else if (!rule.getLinkedItems().contains(metadata.getId())) {
                     rule.getLinkedItems().add(metadata.getId());
                 }
@@ -868,6 +878,129 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
         LOGGER.info("{} profiles updated for past event condition in {}ms", updatedProfileCount, System.currentTimeMillis() - t);
     }
 
+    private void recalculatePastEventMetricsOnProfiles(Condition eventCondition, Condition parentCondition,
+                                                       boolean forceRefresh, boolean resetExistingProfilesNotMatching) {
+        long t = System.currentTimeMillis();
+        Condition andCondition = getPastEventConditionWithTimeWindow(eventCondition, parentCondition);
+        String propertyKey = (String) parentCondition.getParameter("generatedPropertyKey");
+        Set<String> existingProfilesWithMetrics = resetExistingProfilesNotMatching ? getExistingProfilesWithPastEventMetric(propertyKey) : Collections.emptySet();
+
+        Set<String> profileIds = new HashSet<>();
+        if (pastEventsDisablePartitions) {
+            profileIds.addAll(persistenceService.aggregateWithOptimizedQuery(andCondition, new TermsAggregate("profileId"), Event.ITEM_TYPE, maximumIdsQueryCount).keySet());
+        } else {
+            Map<String, Double> m = persistenceService.getSingleValuesMetrics(andCondition, new String[]{"card"}, "profileId.keyword", Event.ITEM_TYPE);
+            long card = m.get("_card").longValue();
+            int numParts = (int) (card / aggregateQueryBucketSize) + 2;
+            for (int i = 0; i < numParts; i++) {
+                profileIds.addAll(persistenceService.aggregateWithOptimizedQuery(andCondition, new TermsAggregate("profileId", i, numParts), Event.ITEM_TYPE).keySet());
+            }
+        }
+
+        Map<String, Map<String, Object>> metricByProfile = new LinkedHashMap<>();
+        for (String profileId : profileIds) {
+            if (!profileId.startsWith("_")) {
+                metricByProfile.put(profileId, getPastEventMetricForProfile(andCondition, parentCondition, propertyKey, profileId));
+            }
+        }
+
+        existingProfilesWithMetrics.removeAll(profileIds);
+        for (String profileId : existingProfilesWithMetrics) {
+            metricByProfile.put(profileId, getEmptyPastEventMetric(propertyKey));
+        }
+
+        int updatedProfileCount = updatePastEventMetricsOnProfiles(metricByProfile).size();
+        if (forceRefresh && updatedProfileCount > 0) {
+            persistenceService.refreshIndex(Profile.class);
+        }
+
+        LOGGER.info("{} profiles updated for past event metric condition in {}ms", updatedProfileCount, System.currentTimeMillis() - t);
+    }
+
+    private Condition getPastEventConditionWithTimeWindow(Condition eventCondition, Condition parentCondition) {
+        List<Condition> l = new ArrayList<>();
+        Condition andCondition = new Condition();
+        andCondition.setConditionType(definitionsService.getConditionType("booleanCondition"));
+        andCondition.setParameter("operator", "and");
+        andCondition.setParameter("subConditions", l);
+        l.add(eventCondition);
+
+        Integer numberOfDays = (Integer) parentCondition.getParameter("numberOfDays");
+        String fromDate = (String) parentCondition.getParameter("fromDate");
+        String toDate = (String) parentCondition.getParameter("toDate");
+
+        if (numberOfDays != null) {
+            Condition numberOfDaysCondition = new Condition();
+            numberOfDaysCondition.setConditionType(definitionsService.getConditionType("sessionPropertyCondition"));
+            numberOfDaysCondition.setParameter("propertyName", "timeStamp");
+            numberOfDaysCondition.setParameter("comparisonOperator", "greaterThan");
+            numberOfDaysCondition.setParameter("propertyValue", "now-" + numberOfDays + "d");
+            l.add(numberOfDaysCondition);
+        }
+        if (fromDate != null) {
+            Condition startDateCondition = new Condition();
+            startDateCondition.setConditionType(definitionsService.getConditionType("sessionPropertyCondition"));
+            startDateCondition.setParameter("propertyName", "timeStamp");
+            startDateCondition.setParameter("comparisonOperator", "greaterThanOrEqualTo");
+            startDateCondition.setParameter("propertyValueDate", fromDate);
+            l.add(startDateCondition);
+        }
+        if (toDate != null) {
+            Condition endDateCondition = new Condition();
+            endDateCondition.setConditionType(definitionsService.getConditionType("sessionPropertyCondition"));
+            endDateCondition.setParameter("propertyName", "timeStamp");
+            endDateCondition.setParameter("comparisonOperator", "lessThanOrEqualTo");
+            endDateCondition.setParameter("propertyValueDate", toDate);
+            l.add(endDateCondition);
+        }
+        return andCondition;
+    }
+
+    private Map<String, Object> getPastEventMetricForProfile(Condition eventCondition, Condition parentCondition, String propertyKey, String profileId) {
+        Condition andCondition = new Condition(definitionsService.getConditionType("booleanCondition"));
+        andCondition.setParameter("operator", "and");
+        List<Condition> conditions = new ArrayList<>();
+        conditions.add(eventCondition);
+
+        Condition profileFilter = new Condition(definitionsService.getConditionType("sessionPropertyCondition"));
+        profileFilter.setParameter("propertyName", "profileId");
+        profileFilter.setParameter("comparisonOperator", "equals");
+        profileFilter.setParameter("propertyValue", profileId);
+        conditions.add(profileFilter);
+        andCondition.setParameter("subConditions", conditions);
+
+        String aggregationType = (String) parentCondition.getParameter("aggregationType");
+        aggregationType = aggregationType == null ? "count" : aggregationType;
+        String metricProperty = (String) parentCondition.getParameter("metricProperty");
+        long count = persistenceService.queryCount(andCondition, Event.ITEM_TYPE);
+        long metricCount = count;
+        double sum = 0.0d;
+
+        if (!"count".equals(aggregationType)) {
+            Map<String, Double> metrics = persistenceService.getSingleValuesMetrics(andCondition, new String[]{"sum", "count"}, metricProperty, Event.ITEM_TYPE);
+            sum = metrics.getOrDefault("_sum", 0.0d);
+            metricCount = metrics.getOrDefault("_count", 0.0d).longValue();
+        }
+
+        Map<String, Object> metric = new HashMap<>();
+        metric.put("metricKey", propertyKey);
+        metric.put("count", count);
+        metric.put("sum", sum);
+        metric.put("avg", metricCount > 0 ? sum / metricCount : 0.0d);
+        metric.put("metricCount", metricCount);
+        return metric;
+    }
+
+    private Map<String, Object> getEmptyPastEventMetric(String propertyKey) {
+        Map<String, Object> metric = new HashMap<>();
+        metric.put("metricKey", propertyKey);
+        metric.put("count", 0L);
+        metric.put("sum", 0.0d);
+        metric.put("avg", 0.0d);
+        metric.put("metricCount", 0L);
+        return metric;
+    }
+
     /**
      * Return the list of profile ids, for profiles that already have an event count matching the generated property key
      *
@@ -897,6 +1030,27 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
         return profileIds;
     }
 
+    private Set<String> getExistingProfilesWithPastEventMetric(String generatedPropertyKey) {
+        ConditionBuilder conditionBuilder = definitionsService.getConditionBuilder();
+        ConditionBuilder.ConditionItem subConditionKey = conditionBuilder.profileProperty("systemProperties.pastEventMetrics.key").equalTo(generatedPropertyKey);
+        Condition condition = conditionBuilder.nested(subConditionKey, "systemProperties.pastEventMetrics").build();
+
+        Set<String> profileIds = new HashSet<>();
+        if (pastEventsDisablePartitions) {
+            profileIds.addAll(persistenceService.aggregateWithOptimizedQuery(condition, new TermsAggregate("itemId"),
+                    Profile.ITEM_TYPE, maximumIdsQueryCount).keySet());
+        } else {
+            Map<String, Double> m = persistenceService.getSingleValuesMetrics(condition, new String[]{"card"}, "itemId.keyword", Profile.ITEM_TYPE);
+            long card = m.get("_card").longValue();
+            int numParts = (int) (card / aggregateQueryBucketSize) + 2;
+            for (int i = 0; i < numParts; i++) {
+                profileIds.addAll(persistenceService.aggregateWithOptimizedQuery(condition, new TermsAggregate("itemId", i, numParts),
+                        Profile.ITEM_TYPE).keySet());
+            }
+        }
+        return profileIds;
+    }
+
     public String getGeneratedPropertyKey(Condition condition, Condition parentCondition) {
         try {
             Map<String, Object> m = new HashMap<>();
@@ -909,11 +1063,17 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
             }
             Object toDate = parentCondition.getParameter("toDate");
             if (toDate != null) {
-                m.put("fromDate", parentCondition.getParameter("toDate"));
+                m.put("toDate", parentCondition.getParameter("toDate"));
+            }
+            if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
+                m.put("aggregationType", parentCondition.getParameter("aggregationType"));
+                m.put("metricProperty", parentCondition.getParameter("metricProperty"));
+                m.put("minimumValue", parentCondition.getParameter("minimumValue"));
+                m.put("maximumValue", parentCondition.getParameter("maximumValue"));
             }
 
             String key = CustomObjectMapper.getObjectMapper().writeValueAsString(m);
-            return "eventTriggered" + getMD5(key);
+            return (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId()) ? "eventMetric" : "eventTriggered") + getMD5(key);
         } catch (JsonProcessingException e) {
             LOGGER.error("Cannot generate key", e);
             return null;
@@ -932,6 +1092,15 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
                         if (pastEventCondition.containsParameter("numberOfDays")) {
                             recalculatePastEventOccurrencesOnProfiles(rule.getCondition(), pastEventCondition, true, true);
                             LOGGER.info("Event occurrence count on profiles updated for rule: {}", rule.getItemId());
+                            if (rule.getLinkedItems() != null && rule.getLinkedItems().size() > 0) {
+                                segmentOrScoringIdsToReevaluate.addAll(rule.getLinkedItems());
+                            }
+                        }
+                    } else if (action.getActionTypeId().equals("setEventMetricAction")) {
+                        Condition pastEventMetricCondition = (Condition) action.getParameterValues().get("pastEventMetricCondition");
+                        if (pastEventMetricCondition.containsParameter("numberOfDays")) {
+                            recalculatePastEventMetricsOnProfiles(rule.getCondition(), pastEventMetricCondition, true, true);
+                            LOGGER.info("Event metric on profiles updated for rule: {}", rule.getItemId());
                             if (rule.getLinkedItems() != null && rule.getLinkedItems().size() > 0) {
                                 segmentOrScoringIdsToReevaluate.addAll(rule.getLinkedItems());
                             }
@@ -1007,6 +1176,36 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
                     persistenceService.updateWithQueryAndStoredScript(Profile.class, new String[]{"updatePastEventOccurences"}, new Map[]{paramPerProfile}, new Condition[]{profileIdCondition});
                 } catch (Exception e) {
                     LOGGER.error("Error updating {} profiles for past event system properties", paramPerProfile.size(), e);
+                } finally {
+                    paramPerProfile.clear();
+                    batchProfilesToUpdate.clear();
+                }
+            }
+        }
+        return profilesUpdated;
+    }
+
+    private Set<String> updatePastEventMetricsOnProfiles(Map<String, Map<String, Object>> metricByProfile) {
+        Set<String> profilesUpdated = new HashSet<>();
+        Set<String> batchProfilesToUpdate = new HashSet<>();
+        Iterator<Map.Entry<String, Map<String, Object>>> entryIterator = metricByProfile.entrySet().iterator();
+        Map<String, Map<String, Object>> paramPerProfile = new HashMap<>();
+
+        while (entryIterator.hasNext()) {
+            Map.Entry<String, Map<String, Object>> entry = entryIterator.next();
+            String profileId = entry.getKey();
+            if (!profileId.startsWith("_")) {
+                paramPerProfile.put(profileId, entry.getValue());
+                profilesUpdated.add(profileId);
+                batchProfilesToUpdate.add(profileId);
+            }
+
+            if (batchProfilesToUpdate.size() == segmentUpdateBatchSize || (!entryIterator.hasNext() && !batchProfilesToUpdate.isEmpty())) {
+                try {
+                    Condition profileIdCondition = definitionsService.getConditionBuilder().condition("idsCondition").parameter("ids", batchProfilesToUpdate).parameter("match", true).build();
+                    persistenceService.updateWithQueryAndStoredScript(Profile.class, new String[]{"updatePastEventMetrics"}, new Map[]{paramPerProfile}, new Condition[]{profileIdCondition});
+                } catch (Exception e) {
+                    LOGGER.error("Error updating {} profiles for past event metric system properties", paramPerProfile.size(), e);
                 } finally {
                     paramPerProfile.clear();
                     batchProfilesToUpdate.clear();

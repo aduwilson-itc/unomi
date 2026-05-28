@@ -1,0 +1,20 @@
+{
+  "metadata": {
+    "id": "setEventMetricAction",
+    "name": "setEventMetricAction",
+    "description": "Maintains event count, sum, and average metrics on a profile.",
+    "systemTags": [
+      "profileTags",
+      "behavioral"
+    ],
+    "readOnly": true
+  },
+  "actionExecutor": "setEventMetric",
+  "parameters": [
+    {
+      "id": "pastEventMetricCondition",
+      "type": "condition",
+      "multivalued": false
+    }
+  ]
+}

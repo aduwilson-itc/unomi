@@ -120,6 +120,13 @@
 
     <service interface="org.apache.unomi.persistence.spi.conditions.evaluator.ConditionEvaluator">
         <service-properties>
+            <entry key="conditionEvaluatorId" value="pastEventMetricConditionEvaluator"/>
+        </service-properties>
+        <bean class="org.apache.unomi.plugins.baseplugin.conditions.PastEventMetricConditionEvaluator"/>
+    </service>
+
+    <service interface="org.apache.unomi.persistence.spi.conditions.evaluator.ConditionEvaluator">
+        <service-properties>
             <entry key="conditionEvaluatorId" value="nestedConditionEvaluator"/>
         </service-properties>
         <bean class="org.apache.unomi.plugins.baseplugin.conditions.NestedConditionEvaluator">
@@ -211,6 +218,16 @@
             <entry key="actionExecutorId" value="setEventOccurenceCount"/>
         </service-properties>
         <bean class="org.apache.unomi.plugins.baseplugin.actions.SetEventOccurenceCountAction">
+            <property name="definitionsService" ref="definitionsService"/>
+            <property name="persistenceService" ref="persistenceService"/>
+        </bean>
+    </service>
+
+    <service interface="org.apache.unomi.api.actions.ActionExecutor">
+        <service-properties>
+            <entry key="actionExecutorId" value="setEventMetric"/>
+        </service-properties>
+        <bean class="org.apache.unomi.plugins.baseplugin.actions.SetEventMetricAction">
             <property name="definitionsService" ref="definitionsService"/>
             <property name="persistenceService" ref="persistenceService"/>
         </bean>

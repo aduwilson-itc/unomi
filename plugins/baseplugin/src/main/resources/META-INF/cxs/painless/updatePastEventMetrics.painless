@@ -1,0 +1,52 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+if (params.containsKey(ctx._source.itemId)) {
+    Map metricValue = params.get(ctx._source.itemId);
+    String metricKey = metricValue.get('metricKey');
+
+    if (ctx._source.systemProperties == null) {
+        ctx._source.systemProperties = new HashMap();
+    }
+
+    if (ctx._source.systemProperties.pastEventMetrics == null) {
+        ctx._source.systemProperties.pastEventMetrics = new ArrayList();
+    }
+
+    boolean exists = false;
+    for (metric in ctx._source.systemProperties.pastEventMetrics) {
+        if (metric.get('key') == metricKey) {
+            metric.put('count', metricValue.get('count'));
+            metric.put('sum', metricValue.get('sum'));
+            metric.put('avg', metricValue.get('avg'));
+            metric.put('metricCount', metricValue.get('metricCount'));
+            exists = true;
+        }
+    }
+
+    if (!exists) {
+        Map newMetric = new HashMap();
+        newMetric.put('key', metricKey);
+        newMetric.put('count', metricValue.get('count'));
+        newMetric.put('sum', metricValue.get('sum'));
+        newMetric.put('avg', metricValue.get('avg'));
+        newMetric.put('metricCount', metricValue.get('metricCount'));
+        ctx._source.systemProperties.pastEventMetrics.add(newMetric);
+    }
+
+    ctx._source.systemProperties.put('lastUpdated', new Date());
+}
