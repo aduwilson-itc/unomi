@@ -32,9 +32,11 @@ import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Produces(MediaType.APPLICATION_JSON)
 @CrossOriginResourceSharing(
@@ -63,13 +65,17 @@ public class IngestionRollbackEndPoint {
         }
 
         List<Map<String, Object>> snapshots = (List<Map<String, Object>>) request.getOrDefault("snapshots", new ArrayList<>());
-        int restoredProfiles = restoreProfiles(snapshots);
-        boolean eventsDeleted = persistenceService.removeByQuery(runEventCondition(runId), Event.class);
+        boolean deleteEvents = !Boolean.FALSE.equals(request.get("deleteEvents"));
+        boolean eventsDeleted = deleteEvents && persistenceService.removeByQuery(runEventCondition(runId), Event.class);
+        List<String> profileIdsToDelete = (List<String>) request.getOrDefault("profileIdsToDelete", new ArrayList<>());
+        int deletedProfiles = deleteProfiles(profileIdsToDelete);
+        int restoredProfiles = restoreProfiles(snapshots, new HashSet<>(profileIdsToDelete));
 
         Map<String, Object> response = new HashMap<>();
         response.put("status", "completed");
         response.put("runId", runId);
         response.put("eventsDeleted", eventsDeleted);
+        response.put("profilesDeleted", deletedProfiles);
         response.put("snapshotsRestored", snapshots.size());
         response.put("profilesRestored", restoredProfiles);
         response.put("recalculation", "not_available");
@@ -84,7 +90,23 @@ public class IngestionRollbackEndPoint {
         return condition;
     }
 
-    private int restoreProfiles(List<Map<String, Object>> snapshots) {
+    private int deleteProfiles(List<String> profileIds) {
+        int deletedProfiles = 0;
+        for (String profileId : profileIds) {
+            if (profileId == null || profileId.isBlank()) {
+                continue;
+            }
+            Profile profile = profileService.load(profileId);
+            if (profile == null) {
+                continue;
+            }
+            profileService.delete(profileId, false);
+            deletedProfiles++;
+        }
+        return deletedProfiles;
+    }
+
+    private int restoreProfiles(List<Map<String, Object>> snapshots, Set<String> deletedProfileIds) {
         int restoredProfiles = 0;
         Map<String, List<Map<String, Object>>> snapshotsByProfile = new HashMap<>();
         for (Map<String, Object> snapshot : snapshots) {
@@ -92,12 +114,18 @@ public class IngestionRollbackEndPoint {
         }
 
         for (Map.Entry<String, List<Map<String, Object>>> entry : snapshotsByProfile.entrySet()) {
+            if (deletedProfileIds.contains(entry.getKey())) {
+                continue;
+            }
             Profile profile = profileService.load(entry.getKey());
             if (profile == null) {
                 continue;
             }
             boolean changed = false;
             for (Map<String, Object> snapshot : entry.getValue()) {
+                if ("__profile__".equals(snapshot.get("propertyPath"))) {
+                    continue;
+                }
                 String propertyPath = "properties." + snapshot.get("propertyPath");
                 if (Boolean.TRUE.equals(snapshot.get("existed"))) {
                     changed |= PropertyHelper.setProperty(profile, propertyPath, snapshot.get("value"), "alwaysSet");

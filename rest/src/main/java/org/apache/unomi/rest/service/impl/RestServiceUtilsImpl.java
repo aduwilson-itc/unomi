@@ -118,14 +118,14 @@ public class RestServiceUtilsImpl implements RestServiceUtils {
         if (eventsRequestContext.getProfile() == null) {
             if (profileId == null || invalidateProfile) {
                 // no profileId cookie was found or the profile has to be invalidated, we generate a new one and create the profile in the profile service
-                eventsRequestContext.setProfile(createNewProfile(null, timestamp));
+                eventsRequestContext.setProfile(createNewProfile(null, scope, timestamp));
                 profileCreated = true;
             } else {
                 eventsRequestContext.setProfile(profileService.load(profileId));
                 if (eventsRequestContext.getProfile() == null) {
                     // this can happen if we have an old cookie but have reset the server,
                     // or if we merged the profiles and somehow this cookie didn't get updated.
-                    eventsRequestContext.setProfile(createNewProfile(profileId, timestamp));
+                    eventsRequestContext.setProfile(createNewProfile(profileId, scope, timestamp));
                     profileCreated = true;
                 }
             }
@@ -316,13 +316,14 @@ public class RestServiceUtilsImpl implements RestServiceUtils {
         }
     }
 
-    private Profile createNewProfile(String existingProfileId, Date timestamp) {
+    private Profile createNewProfile(String existingProfileId, String scope, Date timestamp) {
         Profile profile;
         String profileId = existingProfileId;
         if (profileId == null) {
             profileId = UUID.randomUUID().toString();
         }
         profile = new Profile(profileId);
+        profile.setScope(scope);
         profile.setProperty("firstVisit", timestamp);
         return profile;
     }
