@@ -19,6 +19,7 @@ package org.apache.unomi.plugins.baseplugin.actions;
 
 import org.apache.commons.beanutils.PropertyUtils;
 import org.apache.unomi.api.Event;
+import org.apache.unomi.api.Profile;
 import org.apache.unomi.api.actions.Action;
 import org.apache.unomi.api.actions.ActionExecutor;
 import org.apache.unomi.api.conditions.Condition;
@@ -53,7 +54,10 @@ public class SetEventMetricAction implements ActionExecutor {
     public int execute(Action action, Event event) {
         final Condition metricCondition = (Condition) action.getParameterValues().get("pastEventMetricCondition");
         EventMetricValue value = calculateMetric(metricCondition, event);
-        if (updateProfileMetric(event, (String) metricCondition.getParameter("generatedPropertyKey"), value)) {
+        String key = (String) metricCondition.getParameter("generatedPropertyKey");
+        boolean updated = updateProfileMetric(event, key, value);
+        updated = updateDisplayProfileMetric(event, metricCondition, key, value) || updated;
+        if (updated) {
             return EventService.PROFILE_UPDATED;
         }
         return EventService.NO_CHANGE;
@@ -189,6 +193,60 @@ public class SetEventMetricAction implements ActionExecutor {
 
     private boolean sameDouble(Object actual, double expected) {
         return actual instanceof Number && Double.compare(((Number) actual).doubleValue(), expected) == 0;
+    }
+
+    private boolean updateDisplayProfileMetric(Event event, Condition metricCondition, String key, EventMetricValue value) {
+        String displayProperty = normalizeDisplayProfileProperty((String) metricCondition.getParameter("displayProfileProperty"));
+        if (displayProperty == null) {
+            return false;
+        }
+
+        Map<String, Object> displayValue = new HashMap<>();
+        Object segmentId = metricCondition.getParameter("displayProfileSegmentId");
+        if (segmentId != null) {
+            displayValue.put("segmentId", segmentId);
+        }
+        displayValue.put("generatedPropertyKey", key);
+        displayValue.put("aggregationType", getAggregationType(metricCondition));
+        displayValue.put("count", value.count);
+        displayValue.put("sum", value.sum);
+        displayValue.put("avg", value.avg);
+        displayValue.put("metricCount", value.metricCount);
+        return setNestedProperty(getProfileProperties(event), displayProperty, displayValue);
+    }
+
+    private Map<String, Object> getProfileProperties(Event event) {
+        Profile profile = event.getProfile();
+        if (profile.getProperties() == null) {
+            profile.setProperties(new HashMap<String, Object>());
+        }
+        return profile.getProperties();
+    }
+
+    private String normalizeDisplayProfileProperty(String displayProperty) {
+        if (displayProperty == null) {
+            return null;
+        }
+        String normalized = displayProperty.trim().replaceFirst("^properties\\.", "");
+        if (normalized.isEmpty() || normalized.startsWith("systemProperties.")) {
+            return null;
+        }
+        return normalized;
+    }
+
+    private boolean setNestedProperty(Map<String, Object> root, String path, Object value) {
+        String[] parts = path.split("\\.");
+        Map<String, Object> current = root;
+        for (int i = 0; i < parts.length - 1; i++) {
+            Object next = current.get(parts[i]);
+            if (!(next instanceof Map)) {
+                next = new HashMap<String, Object>();
+                current.put(parts[i], next);
+            }
+            current = (Map<String, Object>) next;
+        }
+        Object previous = current.put(parts[parts.length - 1], value);
+        return !value.equals(previous);
     }
 
     private boolean inTimeRange(Condition metricCondition, Event event) {

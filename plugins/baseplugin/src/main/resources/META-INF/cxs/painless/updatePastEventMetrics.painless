@@ -18,6 +18,7 @@
 if (params.containsKey(ctx._source.itemId)) {
     Map metricValue = params.get(ctx._source.itemId);
     String metricKey = metricValue.get('metricKey');
+    String displayProfileProperty = metricValue.get('displayProfileProperty');
 
     if (ctx._source.systemProperties == null) {
         ctx._source.systemProperties = new HashMap();
@@ -49,4 +50,36 @@ if (params.containsKey(ctx._source.itemId)) {
     }
 
     ctx._source.systemProperties.put('lastUpdated', new Date());
+
+    if (displayProfileProperty != null && displayProfileProperty.length() > 0) {
+        if (displayProfileProperty.startsWith('properties.')) {
+            displayProfileProperty = displayProfileProperty.substring(11);
+        }
+        if (!displayProfileProperty.startsWith('systemProperties.')) {
+            if (ctx._source.properties == null) {
+                ctx._source.properties = new HashMap();
+            }
+
+            Map displayValue = new HashMap();
+            if (metricValue.get('displayProfileSegmentId') != null) {
+                displayValue.put('segmentId', metricValue.get('displayProfileSegmentId'));
+            }
+            displayValue.put('generatedPropertyKey', metricKey);
+            displayValue.put('aggregationType', metricValue.get('aggregationType'));
+            displayValue.put('count', metricValue.get('count'));
+            displayValue.put('sum', metricValue.get('sum'));
+            displayValue.put('avg', metricValue.get('avg'));
+            displayValue.put('metricCount', metricValue.get('metricCount'));
+
+            String[] parts = displayProfileProperty.splitOnToken('.');
+            Map current = ctx._source.properties;
+            for (int i = 0; i < parts.length - 1; i++) {
+                if (!(current.get(parts[i]) instanceof Map)) {
+                    current.put(parts[i], new HashMap());
+                }
+                current = current.get(parts[i]);
+            }
+            current.put(parts[parts.length - 1], displayValue);
+        }
+    }
 }

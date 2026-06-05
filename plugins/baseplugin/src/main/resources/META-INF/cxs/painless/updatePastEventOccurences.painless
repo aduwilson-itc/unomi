@@ -19,6 +19,7 @@ if (params.containsKey(ctx._source.itemId)) {
     Map pastEventKeyValue = params.get(ctx._source.itemId);
     String pastEventKey = pastEventKeyValue.get('pastEventKey');
     Long valueToAdd = (Long) pastEventKeyValue.get('valueToAdd');
+    String displayProfileProperty = pastEventKeyValue.get('displayProfileProperty');
 
     if (ctx._source.systemProperties == null) {
         ctx._source.systemProperties = new HashMap();
@@ -44,4 +45,33 @@ if (params.containsKey(ctx._source.itemId)) {
     }
 
     ctx._source.systemProperties.put('lastUpdated', new Date());
+
+    if (displayProfileProperty != null && displayProfileProperty.length() > 0) {
+        if (displayProfileProperty.startsWith('properties.')) {
+            displayProfileProperty = displayProfileProperty.substring(11);
+        }
+        if (!displayProfileProperty.startsWith('systemProperties.')) {
+            if (ctx._source.properties == null) {
+                ctx._source.properties = new HashMap();
+            }
+
+            Map displayValue = new HashMap();
+            if (pastEventKeyValue.get('displayProfileSegmentId') != null) {
+                displayValue.put('segmentId', pastEventKeyValue.get('displayProfileSegmentId'));
+            }
+            displayValue.put('generatedPropertyKey', pastEventKey);
+            displayValue.put('aggregationType', 'count');
+            displayValue.put('count', valueToAdd);
+
+            String[] parts = displayProfileProperty.splitOnToken('.');
+            Map current = ctx._source.properties;
+            for (int i = 0; i < parts.length - 1; i++) {
+                if (!(current.get(parts[i]) instanceof Map)) {
+                    current.put(parts[i], new HashMap());
+                }
+                current = current.get(parts[i]);
+            }
+            current.put(parts[parts.length - 1], displayValue);
+        }
+    }
 }

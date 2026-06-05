@@ -57,6 +57,11 @@
       "multivalued": false
     },
     {
+      "id": "displayProfileProperty",
+      "type": "string",
+      "multivalued": false
+    },
+    {
       "id": "eventCondition",
       "type": "Condition",
       "multivalued": false

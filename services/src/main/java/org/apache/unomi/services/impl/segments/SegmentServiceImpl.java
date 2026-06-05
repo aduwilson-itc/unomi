@@ -747,32 +747,30 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
             String key = getGeneratedPropertyKey(condition, parentCondition);
             if (key != null) {
                 parentCondition.setParameter("generatedPropertyKey", key);
+                parentCondition.setParameter("displayProfileSegmentId", metadata.getId());
                 Rule rule = rulesService.getRule(key);
+                boolean shouldRecalculateProfiles = rule == null;
                 if (rule == null) {
                     rule = new Rule(new Metadata(metadata.getScope(), key, "Auto generated rule for " + metadata.getName(), ""));
                     rule.setCondition(condition);
                     rule.getMetadata().setHidden(true);
-                    final Action action = new Action();
-                    if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
-                        action.setActionType(definitionsService.getActionType("setEventMetricAction"));
-                        action.setParameter("pastEventMetricCondition", parentCondition);
-                    } else {
-                        action.setActionType(definitionsService.getActionType("setEventOccurenceCountAction"));
-                        action.setParameter("pastEventCondition", parentCondition);
-                    }
-
-                    rule.setActions(List.of(action));
+                    rule.setActions(List.of(createPastEventRuleAction(parentCondition)));
                     rule.setLinkedItems(List.of(metadata.getId()));
-
-                    // it's a new generated rules to keep track of the event count, we should update all the profile that match this past event
-                    // it will update the count of event occurrence on the profile directly
+                } else if (!rule.getLinkedItems().contains(metadata.getId())) {
+                    rule.getLinkedItems().add(metadata.getId());
+                    shouldRecalculateProfiles = parentCondition.getParameter("displayProfileProperty") != null;
+                } else if (displayProfilePropertyChanged(rule, parentCondition)) {
+                    shouldRecalculateProfiles = true;
+                }
+                rule.setCondition(condition);
+                rule.setActions(List.of(createPastEventRuleAction(parentCondition)));
+                if (shouldRecalculateProfiles) {
+                    // Recalculate so newly created or newly mirrored aggregate values are present on existing profiles.
                     if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
                         recalculatePastEventMetricsOnProfiles(condition, parentCondition, true, false);
                     } else {
                         recalculatePastEventOccurrencesOnProfiles(condition, parentCondition, true, false);
                     }
-                } else if (!rule.getLinkedItems().contains(metadata.getId())) {
-                    rule.getLinkedItems().add(metadata.getId());
                 }
                 rules.add(rule);
             }
@@ -790,6 +788,33 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
                 }
             }
         }
+    }
+
+    private boolean displayProfilePropertyChanged(Rule rule, Condition parentCondition) {
+        Object next = parentCondition.getParameter("displayProfileProperty");
+        if (next == null) {
+            return false;
+        }
+        if (rule.getActions() == null || rule.getActions().isEmpty()) {
+            return true;
+        }
+        Action action = rule.getActions().get(0);
+        Condition previous = PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())
+                ? (Condition) action.getParameterValues().get("pastEventMetricCondition")
+                : (Condition) action.getParameterValues().get("pastEventCondition");
+        return previous == null || !Objects.equals(previous.getParameter("displayProfileProperty"), next);
+    }
+
+    private Action createPastEventRuleAction(Condition parentCondition) {
+        final Action action = new Action();
+        if (PAST_EVENT_METRIC_CONDITION.equals(parentCondition.getConditionTypeId())) {
+            action.setActionType(definitionsService.getActionType("setEventMetricAction"));
+            action.setParameter("pastEventMetricCondition", parentCondition);
+        } else {
+            action.setActionType(definitionsService.getActionType("setEventOccurenceCountAction"));
+            action.setParameter("pastEventCondition", parentCondition);
+        }
+        return action;
     }
 
     /**
@@ -844,12 +869,14 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
         }
 
         String propertyKey = (String) parentCondition.getParameter("generatedPropertyKey");
+        String displayProfileProperty = (String) parentCondition.getParameter("displayProfileProperty");
+        String displayProfileSegmentId = (String) parentCondition.getParameter("displayProfileSegmentId");
         Set<String> existingProfilesWithCounts = resetExistingProfilesNotMatching ? getExistingProfilesWithPastEventOccurrenceCount(propertyKey) : Collections.emptySet();
 
         int updatedProfileCount = 0;
         if (pastEventsDisablePartitions) {
             Map<String, Long> eventCountByProfile = persistenceService.aggregateWithOptimizedQuery(eventCondition, new TermsAggregate("profileId"), Event.ITEM_TYPE, maximumIdsQueryCount);
-            Set<String> updatedProfiles = updatePastEventOccurrencesOnProfiles(eventCountByProfile, propertyKey);
+            Set<String> updatedProfiles = updatePastEventOccurrencesOnProfiles(eventCountByProfile, propertyKey, displayProfileProperty, displayProfileSegmentId);
             existingProfilesWithCounts.removeAll(updatedProfiles);
             updatedProfileCount = updatedProfiles.size();
         } else {
@@ -858,7 +885,7 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
             int numParts = (int) (card / aggregateQueryBucketSize) + 2;
             for (int i = 0; i < numParts; i++) {
                 Map<String, Long> eventCountByProfile = persistenceService.aggregateWithOptimizedQuery(andCondition, new TermsAggregate("profileId", i, numParts), Event.ITEM_TYPE);
-                Set<String> updatedProfiles = updatePastEventOccurrencesOnProfiles(eventCountByProfile, propertyKey);
+                Set<String> updatedProfiles = updatePastEventOccurrencesOnProfiles(eventCountByProfile, propertyKey, displayProfileProperty, displayProfileSegmentId);
                 existingProfilesWithCounts.removeAll(updatedProfiles);
                 updatedProfileCount += updatedProfiles.size();
             }
@@ -868,7 +895,7 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
         // that they do not have matching events anymore in the time based condition
         if (!existingProfilesWithCounts.isEmpty()) {
             updatedProfileCount += updatePastEventOccurrencesOnProfiles(
-                    existingProfilesWithCounts.stream().collect(Collectors.toMap(key -> key, value -> 0L)), propertyKey).size();
+                    existingProfilesWithCounts.stream().collect(Collectors.toMap(key -> key, value -> 0L)), propertyKey, displayProfileProperty, displayProfileSegmentId).size();
         }
 
         if (forceRefresh && updatedProfileCount > 0) {
@@ -906,7 +933,7 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
 
         existingProfilesWithMetrics.removeAll(profileIds);
         for (String profileId : existingProfilesWithMetrics) {
-            metricByProfile.put(profileId, getEmptyPastEventMetric(propertyKey));
+            metricByProfile.put(profileId, getEmptyPastEventMetric(propertyKey, parentCondition));
         }
 
         int updatedProfileCount = updatePastEventMetricsOnProfiles(metricByProfile).size();
@@ -984,6 +1011,9 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
 
         Map<String, Object> metric = new HashMap<>();
         metric.put("metricKey", propertyKey);
+        metric.put("displayProfileProperty", parentCondition.getParameter("displayProfileProperty"));
+        metric.put("displayProfileSegmentId", parentCondition.getParameter("displayProfileSegmentId"));
+        metric.put("aggregationType", aggregationType);
         metric.put("count", count);
         metric.put("sum", sum);
         metric.put("avg", metricCount > 0 ? sum / metricCount : 0.0d);
@@ -991,9 +1021,13 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
         return metric;
     }
 
-    private Map<String, Object> getEmptyPastEventMetric(String propertyKey) {
+    private Map<String, Object> getEmptyPastEventMetric(String propertyKey, Condition parentCondition) {
         Map<String, Object> metric = new HashMap<>();
         metric.put("metricKey", propertyKey);
+        metric.put("displayProfileProperty", parentCondition.getParameter("displayProfileProperty"));
+        metric.put("displayProfileSegmentId", parentCondition.getParameter("displayProfileSegmentId"));
+        String aggregationType = (String) parentCondition.getParameter("aggregationType");
+        metric.put("aggregationType", aggregationType == null ? "count" : aggregationType);
         metric.put("count", 0L);
         metric.put("sum", 0.0d);
         metric.put("avg", 0.0d);
@@ -1152,7 +1186,7 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
      * @param propertyKey         the generate property key for this past event condition, to keep track of the count in the profile
      * @return the set of profiles for witch the count of event occurrences have been updated.
      */
-    private Set<String> updatePastEventOccurrencesOnProfiles(Map<String, Long> eventCountByProfile, String propertyKey) {
+    private Set<String> updatePastEventOccurrencesOnProfiles(Map<String, Long> eventCountByProfile, String propertyKey, String displayProfileProperty, String displayProfileSegmentId) {
         Set<String> profilesUpdated = new HashSet<>();
         Set<String> batchProfilesToUpdate = new HashSet<>();
         Iterator<Map.Entry<String, Long>> entryIterator = eventCountByProfile.entrySet().iterator();
@@ -1164,6 +1198,8 @@ public class SegmentServiceImpl extends AbstractServiceImpl implements SegmentSe
             if (!profileId.startsWith("_")) {
                 Map<String, Object> pastEventKeyValue = new HashMap<>();
                 pastEventKeyValue.put("pastEventKey", propertyKey);
+                pastEventKeyValue.put("displayProfileProperty", displayProfileProperty);
+                pastEventKeyValue.put("displayProfileSegmentId", displayProfileSegmentId);
                 pastEventKeyValue.put("valueToAdd", entry.getValue());
                 paramPerProfile.put(profileId, pastEventKeyValue);
                 profilesUpdated.add(profileId);
