@@ -159,7 +159,8 @@ public class PastEventConditionESQueryBuilder implements ConditionESQueryBuilder
     private ConditionBuilder.ConditionItem createPastEventMustNotExistCondition(String generatedPropertyKey) {
         ConditionBuilder conditionBuilder = definitionsService.getConditionBuilder();
         ConditionBuilder.ConditionItem keyEquals = conditionBuilder.profileProperty("systemProperties.pastEvents.key").equalTo(generatedPropertyKey);
-        return conditionBuilder.not(keyEquals);
+        ConditionBuilder.ConditionItem nestedKeyExists = conditionBuilder.nested(keyEquals, "systemProperties.pastEvents");
+        return conditionBuilder.not(nestedKeyExists);
     }
 
     private Set<String> getProfileIdsMatchingEventCount(Condition eventCondition, int minimumEventCount, int maximumEventCount) {
@@ -230,6 +231,16 @@ public class PastEventConditionESQueryBuilder implements ConditionESQueryBuilder
             profileCondition.setParameter("comparisonOperator", "equals");
             profileCondition.setParameter("propertyValue", profileId);
             l.add(profileCondition);
+        }
+
+        String eventScope = (String) condition.getParameter("eventScope");
+        if (eventScope != null) {
+            Condition scopeCondition = new Condition();
+            scopeCondition.setConditionType(definitionsService.getConditionType("sessionPropertyCondition"));
+            scopeCondition.setParameter("propertyName", "scope");
+            scopeCondition.setParameter("comparisonOperator", "equals");
+            scopeCondition.setParameter("propertyValue", eventScope);
+            l.add(scopeCondition);
         }
 
         Integer numberOfDays = (Integer) condition.getParameter("numberOfDays");

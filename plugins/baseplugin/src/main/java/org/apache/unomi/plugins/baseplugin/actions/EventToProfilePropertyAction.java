@@ -21,6 +21,7 @@ import org.apache.unomi.api.Event;
 import org.apache.unomi.api.actions.Action;
 import org.apache.unomi.api.actions.ActionExecutor;
 import org.apache.unomi.api.services.EventService;
+import org.apache.unomi.persistence.spi.PropertyHelper;
 
 /**
  * A action to copy an event property to a profile property
@@ -31,9 +32,16 @@ public class EventToProfilePropertyAction implements ActionExecutor {
         String eventPropertyName = (String) action.getParameterValues().get("eventPropertyName");
         String profilePropertyName = (String) action.getParameterValues().get("profilePropertyName");
 
-        if (event.getProfile().getProperty(profilePropertyName) == null || !event.getProfile().getProperty(profilePropertyName).equals(event.getProperty(eventPropertyName))) {
-            event.getProfile().setProperty(profilePropertyName, event.getProperty(eventPropertyName));
-            return EventService.PROFILE_UPDATED;
+        Object currentValue = event.getProfile().getNestedProperty(profilePropertyName);
+        Object nextValue = event.getProperty(eventPropertyName);
+        if (currentValue == null || !currentValue.equals(nextValue)) {
+            boolean changed = PropertyHelper.setProperty(
+                    event.getProfile(),
+                    "properties." + profilePropertyName,
+                    nextValue,
+                    "alwaysSet"
+            );
+            return changed ? EventService.PROFILE_UPDATED : EventService.NO_CHANGE;
         }
         return EventService.NO_CHANGE;
     }

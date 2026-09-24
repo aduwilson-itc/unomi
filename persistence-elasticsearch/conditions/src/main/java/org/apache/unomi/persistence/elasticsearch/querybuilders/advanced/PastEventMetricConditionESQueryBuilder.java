@@ -100,8 +100,12 @@ public class PastEventMetricConditionESQueryBuilder implements ConditionESQueryB
         keyCondition.setParameter("comparisonOperator", "equals");
         keyCondition.setParameter("propertyValue", generatedPropertyKey);
 
+        Condition nestedKeyCondition = new Condition(definitionsService.getConditionType("nestedCondition"));
+        nestedKeyCondition.setParameter("path", "systemProperties.pastEventMetrics");
+        nestedKeyCondition.setParameter("subCondition", keyCondition);
+
         Condition notCondition = new Condition(definitionsService.getConditionType("notCondition"));
-        notCondition.setParameter("subCondition", keyCondition);
+        notCondition.setParameter("subCondition", nestedKeyCondition);
 
         Condition zeroCondition = createMetricOccurredCondition(generatedPropertyKey, "count", 0.0d, 0.0d);
 

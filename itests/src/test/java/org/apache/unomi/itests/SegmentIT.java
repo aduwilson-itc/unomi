@@ -139,6 +139,52 @@ public class SegmentIT extends BaseIT {
     }
 
     @Test
+    public void testCompoundPastEventConditionCreatesSingleGeneratedRule() {
+        String segmentId = "compound-past-event-segment";
+        Metadata segmentMetadata = new Metadata("test", segmentId, "Compound past event segment", "");
+        Segment segment = new Segment(segmentMetadata);
+
+        Condition eventTypeCondition = new Condition(definitionsService.getConditionType("eventTypeCondition"));
+        eventTypeCondition.setParameter("eventTypeId", "access-event");
+        Condition gateCondition = new Condition(definitionsService.getConditionType("eventPropertyCondition"));
+        gateCondition.setParameter("propertyName", "properties.gate");
+        gateCondition.setParameter("comparisonOperator", "equals");
+        gateCondition.setParameter("propertyValue", "Staff Gate");
+
+        Condition compoundEventCondition = new Condition(definitionsService.getConditionType("booleanCondition"));
+        compoundEventCondition.setParameter("operator", "and");
+        compoundEventCondition.setParameter("subConditions", List.of(eventTypeCondition, gateCondition));
+
+        Condition pastEventCondition = new Condition(definitionsService.getConditionType("pastEventCondition"));
+        pastEventCondition.setParameter("minimumEventCount", 6);
+        pastEventCondition.setParameter("fromDate", "2026-07-27T00:00:00Z");
+        pastEventCondition.setParameter("toDate", "2026-07-31T23:59:59.999Z");
+        pastEventCondition.setParameter("displayProfileProperty", "aggregates.access-promotion.eventCount");
+        pastEventCondition.setParameter("eventCondition", compoundEventCondition);
+        segment.setCondition(pastEventCondition);
+
+        segmentService.setSegmentDefinition(segment);
+        refreshPersistence(Rule.class);
+
+        List<Rule> generatedRules = persistenceService.query("linkedItems", segmentId, null, Rule.class);
+        Assert.assertEquals("A compound event condition must create one generated rule", 1, generatedRules.size());
+        Rule generatedRule = generatedRules.get(0);
+        Assert.assertEquals(pastEventCondition.getParameter("generatedPropertyKey"), generatedRule.getItemId());
+        Assert.assertEquals(segmentId, pastEventCondition.getParameter("displayProfileSegmentId"));
+        Assert.assertEquals("booleanCondition", generatedRule.getCondition().getConditionTypeId());
+        Assert.assertEquals(2, ((List<?>) generatedRule.getCondition().getParameter("subConditions")).size());
+
+        Condition actionCondition = (Condition) generatedRule.getActions().get(0).getParameterValues().get("pastEventCondition");
+        Assert.assertEquals("pastEventCondition", actionCondition.getConditionTypeId());
+        Assert.assertEquals(6, actionCondition.getParameter("minimumEventCount"));
+        Assert.assertEquals("test", actionCondition.getParameter("eventScope"));
+        Assert.assertEquals("aggregates.access-promotion.eventCount", actionCondition.getParameter("displayProfileProperty"));
+        Condition actionEventCondition = (Condition) actionCondition.getParameter("eventCondition");
+        Assert.assertEquals("booleanCondition", actionEventCondition.getConditionTypeId());
+        Assert.assertEquals(2, ((List<?>) actionEventCondition.getParameter("subConditions")).size());
+    }
+
+    @Test
     public void testSegmentWithPropertyValueDateCondition() {
         Metadata segmentMetadata = new Metadata(SEGMENT_ID);
         Segment segment = new Segment(segmentMetadata);
@@ -285,6 +331,114 @@ public class SegmentIT extends BaseIT {
         keepTrying("Profile should not be engaged in the segment anymore, it have a least one event now",
                 () -> profileService.load("test_profile_id"),
                 updatedProfile -> !updatedProfile.getSegments().contains("negative-past-event-segment-test"), 1000, 20);
+    }
+
+    @Test
+    public void testChangingPastEventSegmentToNegativeRemovesProfilesWithMatchingEvents() throws InterruptedException {
+        String segmentId = "changed-negative-past-event-segment-test";
+        String eventType = "changed-negative-test-event-type";
+
+        Profile matchingProfile = new Profile("changed-negative-matching-profile");
+        Profile noEventProfile = new Profile("changed-negative-no-event-profile");
+        profileService.save(matchingProfile);
+        profileService.save(noEventProfile);
+        persistenceService.refreshIndex(Profile.class, null);
+
+        Date eventDate = Date.from(LocalDate.now().minusDays(3).atStartOfDay(ZoneId.systemDefault()).toInstant());
+        Event historicalEvent = new Event(UUID.randomUUID().toString(), eventType, null, matchingProfile,
+                "changed-negative-scope", null, matchingProfile, eventDate);
+        historicalEvent.setPersistent(true);
+        persistenceService.save(historicalEvent, null, true);
+        persistenceService.refreshIndex(Event.class, historicalEvent.getTimeStamp());
+
+        Metadata segmentMetadata = new Metadata("changed-negative-scope", segmentId, "Changed negative segment", "");
+        Segment segment = new Segment(segmentMetadata);
+        Condition segmentCondition = new Condition(definitionsService.getConditionType("pastEventCondition"));
+        segmentCondition.setParameter("numberOfDays", 10);
+        Condition eventCondition = new Condition(definitionsService.getConditionType("eventTypeCondition"));
+        eventCondition.setParameter("eventTypeId", eventType);
+        segmentCondition.setParameter("eventCondition", eventCondition);
+        segment.setCondition(segmentCondition);
+
+        segmentService.setSegmentDefinition(segment);
+        keepTrying("The profile with the event should initially be in the occurred segment",
+                () -> profileService.load(matchingProfile.getItemId()),
+                updatedProfile -> updatedProfile.getSegments().contains(segmentId), 1000, 20);
+
+        segmentCondition.setParameter("operator", "eventsNotOccurred");
+        segmentService.setSegmentDefinition(segment);
+
+        keepTrying("The profile with the event should be removed after changing to did not occur",
+                () -> profileService.load(matchingProfile.getItemId()),
+                updatedProfile -> !updatedProfile.getSegments().contains(segmentId), 1000, 20);
+        keepTrying("The profile without the event should be added after changing to did not occur",
+                () -> profileService.load(noEventProfile.getItemId()),
+                updatedProfile -> updatedProfile.getSegments().contains(segmentId), 1000, 20);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    public void testScopedPastEventSegmentOnlyCountsEventsFromItsScope() throws InterruptedException {
+        String segmentId = "scoped-past-event-segment-test";
+        String eventType = "scoped-past-event-type";
+        String targetScope = "target-event-scope";
+        String profileId = "scoped-past-event-profile";
+
+        Profile profile = new Profile(profileId);
+        profileService.save(profile);
+        persistenceService.refreshIndex(Profile.class, null);
+
+        Date eventDate = Date.from(LocalDate.now().minusDays(3).atStartOfDay(ZoneId.systemDefault()).toInstant());
+        Event otherScopeEvent = new Event(UUID.randomUUID().toString(), eventType, null, profile,
+                "other-event-scope", null, profile, eventDate);
+        otherScopeEvent.setPersistent(true);
+        persistenceService.save(otherScopeEvent, null, true);
+        persistenceService.refreshIndex(Event.class, otherScopeEvent.getTimeStamp());
+
+        Metadata segmentMetadata = new Metadata(targetScope, segmentId, "Scoped past event segment", "");
+        Segment segment = new Segment(segmentMetadata);
+        Condition segmentCondition = new Condition(definitionsService.getConditionType("pastEventCondition"));
+        segmentCondition.setParameter("numberOfDays", 10);
+        Condition eventCondition = new Condition(definitionsService.getConditionType("eventTypeCondition"));
+        eventCondition.setParameter("eventTypeId", eventType);
+        segmentCondition.setParameter("eventCondition", eventCondition);
+        segment.setCondition(segmentCondition);
+        segmentService.setSegmentDefinition(segment);
+
+        Assert.assertEquals(targetScope, segmentCondition.getParameter("eventScope"));
+        Assert.assertFalse(profileService.load(profileId).getSegments().contains(segmentId));
+
+        profile = profileService.load(profileId);
+        Event targetScopeEvent = new Event(UUID.randomUUID().toString(), eventType, null, profile,
+                targetScope, null, profile, new Date());
+        targetScopeEvent.setPersistent(true);
+        keepTrying("The scoped segment rule should match an event from its own scope",
+                () -> rulesService.getMatchingRules(targetScopeEvent),
+                rules -> !rules.isEmpty(), 1000, 20);
+
+        int changes = eventService.send(targetScopeEvent);
+        if ((changes & EventService.PROFILE_UPDATED) == EventService.PROFILE_UPDATED) {
+            profileService.save(profile);
+            persistenceService.refreshIndex(Profile.class, null);
+        }
+        persistenceService.refreshIndex(Event.class, targetScopeEvent.getTimeStamp());
+
+        String generatedPropertyKey = (String) segmentCondition.getParameter("generatedPropertyKey");
+        keepTrying("Only the event from the segment scope should be counted",
+                () -> profileService.load(profileId),
+                updatedProfile -> {
+                    if (!updatedProfile.getSegments().contains(segmentId)) {
+                        return false;
+                    }
+                    List<Map<String, Object>> pastEvents =
+                            (List<Map<String, Object>>) updatedProfile.getSystemProperties().get("pastEvents");
+                    if (pastEvents == null) {
+                        return false;
+                    }
+                    return pastEvents.stream()
+                            .filter(value -> generatedPropertyKey.equals(value.get("key")))
+                            .anyMatch(value -> ((Number) value.get("count")).intValue() == 1);
+                }, 1000, 20);
     }
 
     @Test

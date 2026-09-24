@@ -57,6 +57,11 @@
       "multivalued": false
     },
     {
+      "id": "eventScope",
+      "type": "string",
+      "multivalued": false
+    },
+    {
       "id": "displayProfileProperty",
       "type": "string",
       "multivalued": false

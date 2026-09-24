@@ -116,6 +116,15 @@ public class SetEventMetricAction implements ActionExecutor {
         eventIdFilter.setParameter("propertyValue", event.getItemId());
         conditions.add(eventIdFilter);
 
+        String eventScope = (String) metricCondition.getParameter("eventScope");
+        if (eventScope != null) {
+            Condition scopeFilter = new Condition(definitionsService.getConditionType("eventPropertyCondition"));
+            scopeFilter.setParameter("propertyName", "scope");
+            scopeFilter.setParameter("comparisonOperator", "equals");
+            scopeFilter.setParameter("propertyValue", eventScope);
+            conditions.add(scopeFilter);
+        }
+
         addTimeConditions(metricCondition, conditions);
         andCondition.setParameter("subConditions", conditions);
         return andCondition;
@@ -251,6 +260,10 @@ public class SetEventMetricAction implements ActionExecutor {
 
     private boolean inTimeRange(Condition metricCondition, Event event) {
         LocalDateTime eventTime = LocalDateTime.ofInstant(event.getTimeStamp().toInstant(), ZoneId.of("UTC"));
+        String eventScope = (String) metricCondition.getParameter("eventScope");
+        if (eventScope != null && !eventScope.equals(event.getScope())) {
+            return false;
+        }
         Integer numberOfDays = (Integer) metricCondition.getParameter("numberOfDays");
         String fromDate = (String) metricCondition.getParameter("fromDate");
         String toDate = (String) metricCondition.getParameter("toDate");

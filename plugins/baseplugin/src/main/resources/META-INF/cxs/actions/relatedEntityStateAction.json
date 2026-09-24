@@ -1,0 +1,55 @@
+{
+  "metadata": {
+    "id": "relatedEntityStateAction",
+    "name": "relatedEntityStateAction",
+    "description": "Upserts or deletes one item in a bounded related entity profile collection",
+    "systemTags": [
+      "profileTags",
+      "event"
+    ],
+    "readOnly": true
+  },
+  "actionExecutor": "relatedEntityState",
+  "parameters": [
+    {
+      "id": "collectionPropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "entityIdPropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "operationPropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "entityStatePropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "sourceUpdatedAtPropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "versionPropertyName",
+      "type": "string",
+      "multivalued": false
+    },
+    {
+      "id": "maxItems",
+      "type": "integer",
+      "multivalued": false
+    },
+    {
+      "id": "summaryProperties",
+      "type": "properties",
+      "multivalued": false
+    }
+  ]
+}

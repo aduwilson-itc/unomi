@@ -71,6 +71,7 @@ public class ScopeServiceImpl implements ScopeService {
     @Override
     public void save(Scope scope) {
         persistenceService.save(scope);
+        scopes.put(scope.getItemId(), scope);
     }
 
     @Override

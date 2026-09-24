@@ -471,7 +471,7 @@ public class GoalsServiceImpl implements GoalsService, SynchronousBundleListener
 
         // resolve aggregate
         BaseAggregate aggregate = null;
-        String property = query.getAggregate().getProperty();
+        String property = query != null && query.getAggregate() != null ? query.getAggregate().getProperty() : null;
         if(query != null && query.getAggregate() != null && property != null) {
             if (query.getAggregate().getType() != null){
                 // try to guess the aggregate type

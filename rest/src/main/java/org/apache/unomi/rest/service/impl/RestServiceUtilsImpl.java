@@ -236,8 +236,9 @@ public class RestServiceUtilsImpl implements RestServiceUtils {
                 eventsRequestContext.setProcessedItems(eventsRequestContext.getProcessedItems() + 1);
 
                 if (event.getEventType() != null) {
+                    Date eventTimestamp = event.getTimeStamp() != null ? event.getTimeStamp() : eventsRequestContext.getTimestamp();
                     Event eventToSend = new Event(event.getEventType(), eventsRequestContext.getSession(), eventsRequestContext.getProfile(), event.getScope(), event.getSource(),
-                            event.getTarget(), event.getProperties(), eventsRequestContext.getTimestamp(), event.isPersistent());
+                            event.getTarget(), event.getProperties(), eventTimestamp, event.isPersistent());
                     eventToSend.setFlattenedProperties(event.getFlattenedProperties());
                     if (!eventService.isEventAllowed(event, thirdPartyId)) {
                         LOGGER.warn("Event is not allowed : {}", event.getEventType());
@@ -245,7 +246,7 @@ public class RestServiceUtilsImpl implements RestServiceUtils {
                     }
                     if (thirdPartyId != null && event.getItemId() != null) {
                         eventToSend = new Event(event.getItemId(), event.getEventType(), eventsRequestContext.getSession(), eventsRequestContext.getProfile(), event.getScope(),
-                                event.getSource(), event.getTarget(), event.getProperties(), eventsRequestContext.getTimestamp(), event.isPersistent());
+                                event.getSource(), event.getTarget(), event.getProperties(), eventTimestamp, event.isPersistent());
                         eventToSend.setFlattenedProperties(event.getFlattenedProperties());
                     }
                     if (filteredEventTypes != null && filteredEventTypes.contains(event.getEventType())) {
@@ -262,7 +263,7 @@ public class RestServiceUtilsImpl implements RestServiceUtils {
                     LOGGER.debug("Received event {} for profile={} session={} target={} timestamp={}", event.getEventType(),
                             eventsRequestContext.getProfile().getItemId(),
                             eventsRequestContext.getSession() != null ? eventsRequestContext.getSession().getItemId() : null,
-                            event.getTarget(), eventsRequestContext.getTimestamp());
+                            event.getTarget(), eventTimestamp);
                     eventsRequestContext.addChanges(eventService.send(eventToSend));
                     // If the event execution changes the profile we need to update it so the next event use the right profile
                     if ((eventsRequestContext.getChanges() & EventService.PROFILE_UPDATED) == EventService.PROFILE_UPDATED) {

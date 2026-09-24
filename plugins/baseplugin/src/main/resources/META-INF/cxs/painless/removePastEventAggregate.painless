@@ -1,0 +1,44 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to you under the Apache License, Version 2.0.
+ */
+
+String generatedPropertyKey = params.get('generatedPropertyKey');
+String systemProperty = params.get('systemProperty');
+
+if (ctx._source.systemProperties != null && ctx._source.systemProperties.get(systemProperty) instanceof List) {
+    List aggregates = ctx._source.systemProperties.get(systemProperty);
+    for (int i = aggregates.size() - 1; i >= 0; i--) {
+        if (aggregates.get(i).get('key') == generatedPropertyKey) {
+            aggregates.remove(i);
+        }
+    }
+    ctx._source.systemProperties.put('lastUpdated', new Date());
+}
+
+String displayProfileProperty = params.get('displayProfileProperty');
+if (displayProfileProperty != null && displayProfileProperty.length() > 0 && ctx._source.properties != null) {
+    if (displayProfileProperty.startsWith('properties.')) {
+        displayProfileProperty = displayProfileProperty.substring(11);
+    }
+    if (!displayProfileProperty.startsWith('systemProperties.')) {
+        String[] parts = displayProfileProperty.splitOnToken('.');
+        Map current = ctx._source.properties;
+        boolean found = true;
+        for (int i = 0; i < parts.length - 1; i++) {
+            if (!(current.get(parts[i]) instanceof Map)) {
+                found = false;
+                break;
+            }
+            current = current.get(parts[i]);
+        }
+        if (found) {
+            Object displayValue = current.get(parts[parts.length - 1]);
+            if (displayValue instanceof Map && ((Map) displayValue).get('generatedPropertyKey') == generatedPropertyKey) {
+                current.remove(parts[parts.length - 1]);
+            }
+        }
+    }
+}

@@ -73,6 +73,15 @@ public class SetEventOccurenceCountAction implements ActionExecutor {
         eventIdFilter.setParameter("propertyValue", event.getItemId());
         conditions.add(eventIdFilter);
 
+        String eventScope = (String) pastEventCondition.getParameter("eventScope");
+        if (eventScope != null) {
+            Condition scopeCondition = new Condition(definitionsService.getConditionType("eventPropertyCondition"));
+            scopeCondition.setParameter("propertyName", "scope");
+            scopeCondition.setParameter("comparisonOperator", "equals");
+            scopeCondition.setParameter("propertyValue", eventScope);
+            conditions.add(scopeCondition);
+        }
+
         Integer numberOfDays = (Integer) pastEventCondition.getParameter("numberOfDays");
         String fromDate = (String) pastEventCondition.getParameter("fromDate");
         String toDate = (String) pastEventCondition.getParameter("toDate");
@@ -118,7 +127,8 @@ public class SetEventOccurenceCountAction implements ActionExecutor {
 
         LocalDateTime eventTime = LocalDateTime.ofInstant(event.getTimeStamp().toInstant(),ZoneId.of("UTC"));
 
-        if (inTimeRange(eventTime, numberOfDays, fromDateTime, toDateTime)) {
+        if (inTimeRange(eventTime, numberOfDays, fromDateTime, toDateTime)
+                && (eventScope == null || eventScope.equals(event.getScope()))) {
             count++;
         }
 
